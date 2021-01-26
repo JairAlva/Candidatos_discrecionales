@@ -2,5 +2,160 @@
 title: "R Notebook"
 output: html_notebook
 ---
+```{r}
+library(readxl)
+library(rio)
+library(tidyverse)
+library(magrittr)
+library(rgdal)
+library(ggpubr) #para mapas en una sola imagen
+```
 
+Cargamos la base del censo e Idh
+```{r}
+idh_censo <- read_excel("idh_censo17.xlsx")
+
+idh_censo$Ubigeo = substr(idh_censo$Ubigeo, 1, 4)
+
+idh_censo$Provincia = str_to_upper(idh_censo$Provincia)
+```
+
+Ahora cargamos el porcentaje de votos válidos que obtuvo el candidato discrecional
+```{r}
+#Primero, hay que estandarizar los ubigeos al utilizado por el INEI
+codigos = read.csv("https://raw.githubusercontent.com/Coronahack-peru/Datos-Abiertos-COVID-19/master/extras/ubigeos.csv", colClasses = "character")
+
+codigos = codigos %>%
+  dplyr::group_by(cod_prov_inei, desc_prov_inei, cod_prov_reniec) %>%
+  tally()
+
+## 2011
+ep2011 = read_excel("EP2011_PROVINCIAL.xlsx")
+
+ep2011$UBIGEO = substr(ep2011$UBIGEO, 1, 4)
+
+ep2011 = merge(codigos, ep2011, by.x = "cod_prov_reniec", by.y = "UBIGEO",
+               all.x = T)
+
+#este código solo se usa para estar seguros que el merge de códigos de provincia fueron pegados correctamente
+ep2011 %>%
+  dplyr::mutate(comp = if_else(PROVINCIA == desc_prov_inei, 1, 0)) %>%
+  filter(comp == 0) %>% view()
+#
+ep2011 = ep2011 %>% 
+  select(cod_prov_reniec, cod_prov_inei, PROVINCIA, Pdiscrecional_2011)
+
+
+## 2016
+ep2016 = read_excel("EP2016_PROVINCIAL.xlsx")
+
+ep2016 = merge(ep2016, codigos, by.x = "UBIGEO_PROVINCIA", by.y = "cod_prov_reniec")
+
+#este código solo se usa para estar seguros que el merge de códigos de provincia fueron pegados correctamente
+ep2016 %>%
+  dplyr::mutate(comp = if_else(PROVINCIA == desc_prov_inei, 1, 0)) %>%
+  filter(comp == 0) %>% view()
+#
+
+ep2016 = ep2016 %>% 
+  select(UBIGEO_PROVINCIA, cod_prov_inei, PROVINCIA, Pdiscrecional)
+
+#junamos los dos años de elección
+ep2016 = merge(ep2016, ep2011, by.x = "UBIGEO_PROVINCIA", by.y = "cod_prov_reniec")
+
+#este código solo se usa para estar seguros que el merge de códigos de provincia fueron pegados correctamente
+ep2016 %>%
+  dplyr::mutate(comp = if_else(PROVINCIA.x == PROVINCIA.y, 1, 0)) %>%
+  filter(comp == 0) %>% view()
+#
+
+ep2016 = ep2016 %>%
+  select(UBIGEO_PROVINCIA, cod_prov_inei.x, PROVINCIA.x, Pdiscrecional_2011, Pdiscrecional) %>%
+  rename(cod_prov_inei = cod_prov_inei.x, PROVINCIA = PROVINCIA.x, Pdiscrecional_2016 = Pdiscrecional)
+```
+
+Merge con los datos que deseamos añadir al mapa
+```{r}
+datos = merge(ep2016, idh_censo, by.x = "cod_prov_inei", by.y = "Ubigeo")
+
+#este código solo se usa para estar seguros que el merge de códigos de provincia fueron pegados correctamente
+datos %>%
+  dplyr::mutate(comp = if_else(PROVINCIA == Provincia, 1, 0)) %>%
+  filter(comp == 0) %>% view()
+#
+
+datos = datos[,-c(2,6)]
+```
+
+
+Finalmente, cargamos el mapa de las provincias del Perú
+```{r}
+provincias = rgdal::readOGR(paste0("Shape-file/PROVINCIAS.shp"))
+
+mapaprov_df <- fortify(model = provincias, region = "IDPROV")
+
+info_municipios <- provincias@data
+
+info_municipios = merge(info_municipios, datos, by.x = "IDPROV", by.y = "cod_prov_inei", all.x=T)
+
+#este código solo se usa para estar seguros que el merge de códigos de provincia fueron pegados correctamente
+info_municipios %>%
+  dplyr::mutate(comp = if_else(PROVINCIA.x == PROVINCIA.y, 1, 0)) %>%
+  filter(comp == 0) %>% view()
+#
+
+info_municipios = info_municipios %>%
+  select(!PROVINCIA.y) %>%
+  rename(PROVINCIA = PROVINCIA.x)
+#Se hace el merge para unir el data frame y las variables. Este documento será utilizado para
+#construir los mapas
+
+mapaprov_df <- mapaprov_df %>%
+  left_join(info_municipios, by = c("id" = "IDPROV"))
+
+#Cargamos el mapa base
+
+mapaprov_df %>%
+  ggplot(aes(x = long, y = lat, group = group)) +
+  geom_polygon(color = "gray20", fill = "white") + 
+  coord_map("mercator") +
+  theme_bw()
+```
+
+CRUZAMOS INFORMACIÓN DEL DESEMPEÑO DE CANDIDATOS DISCRECIONALES CON VARIABLES SOCIODEMOGRÁFICAS
+```{r}
+eleccion2011 = mapaprov_df %>%
+  ggplot(aes(x = long, y = lat, group = group, fill= Pdiscrecional_2011)) +
+  geom_polygon() +
+  coord_map("mercator") +
+  theme_bw() +
+  theme(
+    legend.position = "bottom",
+    axis.text.x = element_blank(),
+    axis.text.y = element_blank(),
+    axis.ticks =  element_blank(),
+    axis.title = element_blank(),
+    panel.border = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()) +
+  scale_fill_viridis_c(option = "A", direction = -1)
+
+eleccion2016 = mapaprov_df %>%
+  ggplot(aes(x = long, y = lat, group = group, fill= Pdiscrecional_2016)) +
+  geom_polygon() +
+  coord_map("mercator") +
+  theme_bw() +
+  theme(
+    legend.position = "bottom",
+    axis.text.x = element_blank(),
+    axis.text.y = element_blank(),
+    axis.ticks =  element_blank(),
+    axis.title = element_blank(),
+    panel.border = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()) +
+  scale_fill_viridis_c(option = "A", direction = -1)
+
+ggarrange(eleccion2011, eleccion2016)
+```
 
