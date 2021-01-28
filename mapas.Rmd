@@ -85,6 +85,8 @@ datos %>%
 #
 
 datos = datos[,-c(2,6)]
+
+cor.test(datos$Pdiscrecional_2011, datos$Pdiscrecional_2016)
 ```
 
 
@@ -138,7 +140,7 @@ eleccion2011 = mapaprov_df %>%
     panel.border = element_blank(),
     panel.grid.major = element_blank(),
     panel.grid.minor = element_blank()) +
-  scale_fill_viridis_c(option = "A", direction = -1)
+  scale_fill_viridis_c(option = "A", direction = -1, limits = c(1, 100))
 
 eleccion2016 = mapaprov_df %>%
   ggplot(aes(x = long, y = lat, group = group, fill= Pdiscrecional_2016)) +
@@ -154,8 +156,79 @@ eleccion2016 = mapaprov_df %>%
     panel.border = element_blank(),
     panel.grid.major = element_blank(),
     panel.grid.minor = element_blank()) +
-  scale_fill_viridis_c(option = "A", direction = -1)
+  scale_fill_viridis_c(option = "A", direction = -1, limits = c(1, 100))
 
 ggarrange(eleccion2011, eleccion2016)
+```
+
+Hacemos el ejercicio con el resultado a nivel distrital
+```{r}
+#Primero, hay que estandarizar los ubigeos al utilizado por el INEI
+linkcodigos = read.csv("https://raw.githubusercontent.com/Coronahack-peru/Datos-Abiertos-COVID-19/master/extras/ubigeos.csv", colClasses = "character")
+
+codigos_distrital = linkcodigos %>%
+  dplyr::group_by(cod_ubigeo_inei, desc_prov_inei, desc_ubigeo_inei, cod_ubigeo_reniec) %>%
+  tally() %>%
+  select(!n)
+
+distrital_2016 = read_excel("EP2016_DISTRITAL.xlsx")
+
+distrital_2016 = merge(distrital_2016, codigos_distrital, by.x = "UBIGEO", by.y = "cod_ubigeo_reniec")
+
+#este código solo se usa para estar seguros que el merge de códigos de provincia fueron pegados correctamente
+distrital_2016 %>%
+  dplyr::mutate(comp = if_else(DISTRITO == desc_ubigeo_inei, 1, 0)) %>%
+  filter(comp == 0) %>% view()
+#
+
+distrital_2016 = distrital_2016 %>%
+  select(UBIGEO, cod_ubigeo_inei, PROVINCIA, DISTRITO, Pdiscrecional_2016)
+
+nbi = read_excel("nbi_2017.xlsx")
+
+distrital_2016 = merge(distrital_2016, nbi, by.x = "cod_ubigeo_inei", by.y = "Ubigeo")
+
+#este código solo se usa para estar seguros que el merge de códigos de provincia fueron pegados correctamente
+distrital_2016 %>%
+  dplyr::mutate(Distrito = str_to_upper(Distrito)) %>%
+  dplyr::mutate(comp = if_else(DISTRITO == Distrito, 1, 0)) %>%
+  filter(comp == 0) %>% view()
+#
+
+distrital_2016 = distrital_2016[,-c(6:8)]
+```
+
+Abrimos la data a nivel distrital
+```{r}
+distritos = rgdal::readOGR(paste0("Shape-file-distritos/DISTRITOS.shp"))
+
+mapadist_df <- fortify(model = distritos, region = "IDDIST")
+
+info_distritos <- distritos@data
+
+info_distritos = merge(info_distritos, distrital_2016, by.x = "IDDIST", by.y = "cod_ubigeo_inei", all.x=T)
+
+#este código solo se usa para estar seguros que el merge de códigos de provincia fueron pegados correctamente
+info_distritos %>%
+  dplyr::mutate(comp = if_else(DISTRITO.x == DISTRITO.y, 1, 0)) %>%
+  filter(comp == 0) %>% view()
+#
+
+info_distritos = info_distritos %>%
+  select(!PROVINCIA.y & !DISTRITO.y & !UBIGEO) %>%
+  rename(PROVINCIA = PROVINCIA.x, DISTRITO = DISTRITO.x)
+#Se hace el merge para unir el data frame y las variables. Este documento será utilizado para
+#construir los mapas
+
+mapadist_df <- mapadist_df %>%
+  left_join(info_distritos, by = c("id" = "IDDIST"))
+
+#Cargamos el mapa base
+
+mapadist_df %>%
+  ggplot(aes(x = long, y = lat, group = group)) +
+  geom_polygon(color = "gray20", fill = "white") + 
+  coord_map("mercator") +
+  theme_bw()
 ```
 
